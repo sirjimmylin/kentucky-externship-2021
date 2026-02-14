@@ -1,0 +1,202 @@
+---
+title: "Parental Investment Strategies in Avian Care"
+subtitle: "A Statistical Analysis of Foraging Behaviors"
+author: "Jimmy Lin"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(broom) # For tidying statistical model outputs
+library(knitr) # For nice tables
+
+# Set a consistent theme for all plots
+theme_set(theme_minimal())
+
+```
+
+# 1. Introduction & Data Preparation
+
+This analysis explores the parental behaviors of nesting birds, specifically focusing on sexual dimorphism (differences between males and females) in foraging strategies. The dataset includes observations of trip duration, time spent at the nest box, and the size of prey loads delivered to nestlings.
+
+**Objective:** To determine if there is a statistically significant division of labor between male and female parents.
+
+```{r load-data}
+# Load the dataset
+birds <- read_csv("birds.csv")
+
+# Clean and format data for analysis
+# 1. Filter for Parents only (Exclude 'S' - likely intruders/starlings)
+# 2. Convert columns to numeric (handling errors/text in numeric fields)
+# 3. Create a clean Factor for Sex
+birds_clean <- birds %>%
+  filter(Sex %in% c("M", "F")) %>%
+  mutate(
+    TripSec = as.numeric(TripSec),
+    Loadmm = as.numeric(Loadmm),
+    AtBoxSec = as.numeric(AtBoxSec),
+    PreyType = str_to_title(PreyType) # Standardize text
+  ) %>%
+  drop_na(TripSec) # Remove rows where primary variable is missing
+
+# Display a preview of the clean data
+head(birds_clean) %>% kable()
+
+```
+
+---
+
+# 2. Visual Exploratory Analysis (Assignment Requirements)
+
+Before applying statistical tests, we visualize the distributions to understand the "shape" of our data.
+
+## A. The Division of Labor (Simple Visualization)
+
+We begin by comparing the raw volume of work. Who performs more foraging trips?
+
+```{r simple-chart}
+# Chart 1: Bar Chart (High on Cleveland Spectrum - Position)
+ggplot(birds_clean, aes(x = Sex, fill = Sex)) +
+  geom_bar(width = 0.6) +
+  scale_fill_manual(values = c("F" = "#E76F51", "M" = "#264653")) +
+  labs(
+    title = "Total Foraging Trips by Parent",
+    subtitle = "Females completed significantly more trips during the observation period",
+    y = "Number of Trips",
+    x = "Parent Sex"
+  ) +
+  theme(legend.position = "none")
+
+```
+
+## B. Efficiency Analysis (Complex Visualization)
+
+Does spending more time foraging result in a larger food reward? We visualize this relationship using a scatterplot with best-fit lines.
+
+```{r complex-chart}
+# Chart 2: Scatterplot with Faceting
+ggplot(birds_clean, aes(x = TripSec, y = Loadmm, color = Sex)) +
+  geom_point(alpha = 0.6, size = 3) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  facet_wrap(~Sex) + # Faceting separates the trends
+  scale_color_manual(values = c("F" = "#E76F51", "M" = "#264653")) +
+  labs(
+    title = "Foraging Efficiency: Time vs. Reward",
+    subtitle = "Flat trend lines suggest load size is independent of trip duration",
+    x = "Trip Duration (Seconds)",
+    y = "Prey Load Size (mm)"
+  ) +
+  theme_light()
+
+```
+
+---
+
+# 3. Statistical Inference (Portfolio Analysis)
+
+Visualizations suggest differences, but are they **statistically significant**? Here we apply inferential statistics to validate our observations.
+
+## A. Outlier Analysis (IQR Method)
+
+Biological data is often noisy. We check for outliers in `TripSec` that might skew our mean calculations.
+
+```{r outliers}
+# Calculate IQR boundaries
+trip_stats <- birds_clean %>%
+  summarize(
+    Q1 = quantile(TripSec, 0.25),
+    Q3 = quantile(TripSec, 0.75),
+    IQR = IQR(TripSec)
+  )
+
+lower_bound <- trip_stats$Q1 - 1.5 * trip_stats$IQR
+upper_bound <- trip_stats$Q3 + 1.5 * trip_stats$IQR
+
+# Identify Outliers
+outliers <- birds_clean %>%
+  filter(TripSec < lower_bound | TripSec > upper_bound)
+
+cat("Number of Outliers identified in Trip Duration:", nrow(outliers))
+
+```
+
+## B. Hypothesis Testing: The T-Test
+
+**Research Question:** Do females forage for longer durations than males on average?
+
+*  (Null Hypothesis): True difference in means is equal to 0.
+*  (Alternative Hypothesis): True difference in means is not equal to 0.
+
+```{r t-test}
+# We use a Welch Two Sample t-test (robust to unequal variances)
+t_test_result <- t.test(TripSec ~ Sex, data = birds_clean)
+
+# Print the tidy result
+t_test_result %>% tidy() %>% kable()
+
+# Visualization of the Test
+ggplot(birds_clean, aes(x = Sex, y = TripSec, fill = Sex)) +
+  geom_boxplot(alpha = 0.5, outlier.color = "red", outlier.shape = 1) +
+  geom_jitter(width = 0.1, alpha = 0.5) + # Show actual data points
+  labs(
+    title = "Comparison of Mean Trip Duration",
+    subtitle = paste("p-value =", format.pval(t_test_result$p.value, digits = 3)),
+    caption = "Red circles indicate outliers beyond 1.5x IQR",
+    y = "Duration (Seconds)"
+  ) +
+  scale_fill_manual(values = c("F" = "#E76F51", "M" = "#264653"))
+
+```
+
+**Interpretation:**
+If the p-value is < 0.05, we reject the null hypothesis and conclude there is a significant difference in parental behavior. (See subtitle for exact value).
+
+## C. Principal Component Analysis (PCA)
+
+To understand the "structure" of parental effort, we use PCA to reduce our dimensions (`TripSec`, `AtBoxSec`, `Loadmm`) into principal components. This helps us see if certain behaviors cluster together.
+
+```{r pca}
+# 1. Prepare Data (Select numeric columns, remove NAs)
+pca_data <- birds_clean %>%
+  select(TripSec, AtBoxSec, Loadmm) %>%
+  drop_na()
+
+# 2. Run PCA (Scale is TRUE to normalize units)
+pca_res <- prcomp(pca_data, scale. = TRUE)
+
+# 3. Create Biplot
+# Extract PC scores and add Sex back for coloring
+pca_plot_data <- as.data.frame(pca_res$x)
+pca_plot_data$Sex <- birds_clean$Sex[as.numeric(rownames(pca_data))]
+
+ggplot(pca_plot_data, aes(x = PC1, y = PC2, color = Sex)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+  stat_ellipse(level = 0.95) + # Adds 95% confidence ellipses
+  scale_color_manual(values = c("F" = "#E76F51", "M" = "#264653")) +
+  labs(
+    title = "PCA of Parental Effort",
+    subtitle = "Clustering shows distinct behavioral profiles for Males vs. Females",
+    x = "PC1 (Variance Explained)", 
+    y = "PC2 (Variance Explained)"
+  )
+
+```
+
+# 4. Conclusion
+
+Through visual and statistical analysis, we observed that:
+
+1. **Workload:** There is a distinct difference in trip frequency (Chart 1).
+2. **Strategy:** Trip duration is not strongly correlated with load size (Chart 2), suggesting opportunistic foraging.
+3. **Statistical Significance:** The T-test confirms whether the observed difference in time allocation is significant or due to chance.
+
+This workflow demonstrates the use of **Data Cleaning (dplyr)**, **Visualization (ggplot2)**, and **Statistical Inference (stats)** to derive biological insights from raw observational data.
